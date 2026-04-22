@@ -1,0 +1,7 @@
+# mt5-bridge/requirements.txt
+fastapi==0.115.1
+uvicorn==0.30.0
+MetaTrader5
+python-dotenv==1.0.0
+pandas==2.2.3
+pydantic==2.9.0

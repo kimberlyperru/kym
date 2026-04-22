@@ -1,0 +1,97 @@
+# render.yaml - Render.com deployment configuration
+services:
+  # Backend API
+  - type: web
+    name: kym-backend
+    env: node
+    plan: free
+    buildCommand: cd backend && npm install
+    startCommand: cd backend && node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: DB_HOST
+        fromDatabase:
+          name: kym-mysql
+          property: host
+      - key: DB_NAME
+        fromDatabase:
+          name: kym-mysql
+          property: database
+      - key: DB_USER
+        fromDatabase:
+          name: kym-mysql
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: kym-mysql
+          property: password
+      - key: DB_PORT
+        fromDatabase:
+          name: kym-mysql
+          property: port
+      # Set these manually in Render dashboard:
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: INTASEND_SECRET_KEY
+        sync: false
+      - key: INTASEND_PUBLISHABLE_KEY
+        sync: false
+      - key: INTASEND_WEBHOOK_SECRET
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: 587
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: NEWS_API_KEY
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_SECRET_PATH
+        value: kym-admin-x9z
+      - key: MT5_BRIDGE_URL
+        sync: false
+      - key: MT5_BRIDGE_SECRET
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: SUBSCRIPTION_PRICE_KSH
+        value: 1
+
+  # Frontend
+  - type: web
+    name: kym-frontend
+    env: static
+    plan: free
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: frontend/build
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: REACT_APP_API_URL
+        sync: false
+      - key: REACT_APP_WS_URL
+        sync: false
+      - key: REACT_APP_ADMIN_PATH
+        value: kym-admin-x9z
+
+databases:
+  - name: kym-mysql
+    plan: free
+    databaseName: kym_trading
