@@ -18,10 +18,15 @@ const runTradingCycle = async (userId, broadcast) => {
   const conn = await pool.getConnection();
   try {
     // 1. Fetch MT5 account config
+    // FIX: removed AND is_connected = TRUE so bot runs even if bridge was offline during setup
     const [accounts] = await conn.execute(
-      'SELECT * FROM mt5_accounts WHERE user_id = ? AND is_connected = TRUE', [userId]
+      'SELECT * FROM mt5_accounts WHERE user_id = ?', [userId]
     );
-    if (accounts.length === 0) { stopBot(userId); return; }
+    if (accounts.length === 0) {
+      console.warn('No MT5 account found for user', userId, '— stopping bot');
+      stopBot(userId);
+      return;
+    }
 
     const account = accounts[0];
     const loginId = decrypt(account.login_id);
@@ -31,16 +36,21 @@ const runTradingCycle = async (userId, broadcast) => {
     const timeframe = account.timeframe;
     let currentLotSize = parseFloat(account.lot_size);
 
-    // 2. Get account balance from MT5
+    // 2. Get account balance from MT5 bridge
     let balance = 0, equity = 0, profit = 0;
     try {
       const accRes = await axios.get(`${MT5_BRIDGE}/account/${loginId}`, { headers: bridgeHeaders, timeout: 8000 });
       balance = accRes.data.balance || 0;
-      equity = accRes.data.equity || 0;
-      profit = accRes.data.profit || 0;
+      equity  = accRes.data.equity  || 0;
+      profit  = accRes.data.profit  || 0;
     } catch (e) {
-      broadcast && broadcast(userId, { type: 'bot_error', message: 'MT5 connection lost' });
-      return;
+      // Bridge offline — keep bot running but skip this cycle
+      console.warn(`Bridge unreachable for user ${userId} — retrying next cycle`);
+      broadcast && broadcast(userId, {
+        type: 'bot_error',
+        message: 'MT5 bridge offline — will retry next cycle. Make sure main.py is running.'
+      });
+      return; // skip this cycle, do not stop the bot
     }
 
     // 3. Get open positions
