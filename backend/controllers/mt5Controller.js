@@ -13,6 +13,17 @@ require('dotenv').config();
 const MT5_BRIDGE    = process.env.MT5_BRIDGE_URL || 'http://localhost:8000';
 const BRIDGE_SECRET = process.env.MT5_BRIDGE_SECRET || '';
 
+// Symbol name cache — populated from bridge on first use
+// Maps our generic names → broker-specific names (e.g. XAUUSD → XAUUSDm)
+const symbolCache = {};
+
+// Resolve symbol name via bridge health endpoint
+const resolveSymbol = async (genericName) => {
+  if (symbolCache[genericName]) return symbolCache[genericName];
+  // Return as-is — the bridge itself does auto-resolution now
+  return genericName;
+};
+
 // Bridge request helper — logs full error so you can debug
 const bridgePost = async (path, body, timeoutMs = 15000) => {
   try {
