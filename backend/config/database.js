@@ -2,54 +2,61 @@
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
-// ── Print all DB env vars on startup so you can debug missing ones ────────────
+// ── Print DB config on startup for debugging ──────────────────────────────────
 console.log('🔍 DB Config:', {
   host:     process.env.DB_HOST     || '❌ MISSING',
-  port:     process.env.DB_PORT     || '3306 (default)',
+  port:     process.env.DB_PORT     || '3306',
   database: process.env.DB_NAME     || '❌ MISSING',
   user:     process.env.DB_USER     || '❌ MISSING',
   password: process.env.DB_PASSWORD ? '✅ set' : '❌ MISSING',
-  ssl:      process.env.DB_SSL      || 'auto'
+  ssl:      process.env.DB_SSL      || 'false'
 });
 
-// ── Build pool config — works locally AND on Render ───────────────────────────
+// ── Pool config ───────────────────────────────────────────────────────────────
 const poolConfig = {
-  host:             process.env.DB_HOST,
-  port:             parseInt(process.env.DB_PORT) || 3306,
-  database:         process.env.DB_NAME,
-  user:             process.env.DB_USER,
-  password:         process.env.DB_PASSWORD,
+  host:               process.env.DB_HOST,
+  port:               parseInt(process.env.DB_PORT) || 3306,
+  database:           process.env.DB_NAME,
+  user:               process.env.DB_USER,
+  password:           process.env.DB_PASSWORD,
   waitForConnections: true,
-  connectionLimit:  10,
-  queueLimit:       0,
-  charset:          'utf8mb4',
-  connectTimeout:   30000,
-  timezone:         '+00:00'
+  connectionLimit:    10,
+  queueLimit:         0,
+  connectTimeout:     30000,
+  timezone:           '+00:00',
+  charset:            'utf8mb4'
 };
 
-// Render MySQL requires SSL — add it when running on Render or when DB_SSL=true
-if (process.env.RENDER || process.env.DB_SSL === 'true') {
+// Enable SSL when DB_SSL=true (required for Railway, PlanetScale, etc.)
+if (process.env.DB_SSL === 'true') {
   poolConfig.ssl = { rejectUnauthorized: false };
-  console.log('🔒 SSL enabled for database connection');
+  console.log('🔒 DB SSL enabled');
 }
 
 const pool = mysql.createPool(poolConfig);
 
 // ── Test connection immediately so startup fails fast with a clear message ─────
 const testConnection = async () => {
-  const conn = await pool.getConnection();
-  await conn.execute('SELECT 1');
-  conn.release();
-  console.log('✅ Database connection successful');
+  try {
+    const conn = await pool.getConnection();
+    await conn.execute('SELECT 1');
+    conn.release();
+    console.log('✅ Database connected successfully');
+  } catch (err) {
+    console.error('\n❌ DATABASE CONNECTION FAILED');
+    console.error('   Error  :', err.message);
+    console.error('   Code   :', err.code);
+    console.error('\n   Check these in your Render/Railway environment:');
+    console.error('   DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD');
+    console.error('   If using Railway: also set DB_SSL=true\n');
+    throw err;
+  }
 };
 
 const initializeDatabase = async () => {
-  // Test first — if this fails the error message is clear
   await testConnection();
-
   const conn = await pool.getConnection();
   try {
-    // Users
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS users (
         id INT PRIMARY KEY AUTO_INCREMENT,
@@ -68,8 +75,6 @@ const initializeDatabase = async () => {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       )
     `);
-
-    // Sessions
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS user_sessions (
         id INT PRIMARY KEY AUTO_INCREMENT,
@@ -87,8 +92,6 @@ const initializeDatabase = async () => {
         INDEX idx_user_sessions (user_id)
       )
     `);
-
-    // Payments
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS payments (
         id INT PRIMARY KEY AUTO_INCREMENT,
@@ -106,8 +109,6 @@ const initializeDatabase = async () => {
         INDEX idx_user_payments (user_id)
       )
     `);
-
-    // MT5 accounts
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS mt5_accounts (
         id INT PRIMARY KEY AUTO_INCREMENT,
@@ -127,8 +128,6 @@ const initializeDatabase = async () => {
         UNIQUE KEY unique_user_mt5 (user_id)
       )
     `);
-
-    // Trades
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS trades (
         id INT PRIMARY KEY AUTO_INCREMENT,
@@ -150,12 +149,9 @@ const initializeDatabase = async () => {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
         FOREIGN KEY (mt5_account_id) REFERENCES mt5_accounts(id) ON DELETE CASCADE,
-        INDEX idx_user_trades (user_id),
-        INDEX idx_trade_status (status)
+        INDEX idx_user_trades (user_id)
       )
     `);
-
-    // Trading stats
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS trading_stats (
         id INT PRIMARY KEY AUTO_INCREMENT,
@@ -177,8 +173,6 @@ const initializeDatabase = async () => {
         UNIQUE KEY unique_user_session (user_id, session_date)
       )
     `);
-
-    // Audit logs
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS audit_logs (
         id INT PRIMARY KEY AUTO_INCREMENT,
@@ -193,8 +187,6 @@ const initializeDatabase = async () => {
         INDEX idx_audit_action (action)
       )
     `);
-
-    // Admins
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS admins (
         id INT PRIMARY KEY AUTO_INCREMENT,
@@ -206,11 +198,10 @@ const initializeDatabase = async () => {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-
     console.log('✅ All database tables ready');
-  } catch (error) {
-    console.error('❌ Table creation error:', error.message);
-    throw error;
+  } catch (err) {
+    console.error('❌ Table creation error:', err.message);
+    throw err;
   } finally {
     conn.release();
   }
