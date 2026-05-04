@@ -2,24 +2,54 @@
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
-const pool = mysql.createPool({
-  host: process.env.DB_HOST,
-  port: parseInt(process.env.DB_PORT) || 3306,
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-  charset: 'utf8mb4',
-  connectTimeout: 10000,
-  timezone: '+00:00'
+// ── Print all DB env vars on startup so you can debug missing ones ────────────
+console.log('🔍 DB Config:', {
+  host:     process.env.DB_HOST     || '❌ MISSING',
+  port:     process.env.DB_PORT     || '3306 (default)',
+  database: process.env.DB_NAME     || '❌ MISSING',
+  user:     process.env.DB_USER     || '❌ MISSING',
+  password: process.env.DB_PASSWORD ? '✅ set' : '❌ MISSING',
+  ssl:      process.env.DB_SSL      || 'auto'
 });
 
+// ── Build pool config — works locally AND on Render ───────────────────────────
+const poolConfig = {
+  host:             process.env.DB_HOST,
+  port:             parseInt(process.env.DB_PORT) || 3306,
+  database:         process.env.DB_NAME,
+  user:             process.env.DB_USER,
+  password:         process.env.DB_PASSWORD,
+  waitForConnections: true,
+  connectionLimit:  10,
+  queueLimit:       0,
+  charset:          'utf8mb4',
+  connectTimeout:   30000,
+  timezone:         '+00:00'
+};
+
+// Render MySQL requires SSL — add it when running on Render or when DB_SSL=true
+if (process.env.RENDER || process.env.DB_SSL === 'true') {
+  poolConfig.ssl = { rejectUnauthorized: false };
+  console.log('🔒 SSL enabled for database connection');
+}
+
+const pool = mysql.createPool(poolConfig);
+
+// ── Test connection immediately so startup fails fast with a clear message ─────
+const testConnection = async () => {
+  const conn = await pool.getConnection();
+  await conn.execute('SELECT 1');
+  conn.release();
+  console.log('✅ Database connection successful');
+};
+
 const initializeDatabase = async () => {
+  // Test first — if this fails the error message is clear
+  await testConnection();
+
   const conn = await pool.getConnection();
   try {
-    // Users table
+    // Users
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS users (
         id INT PRIMARY KEY AUTO_INCREMENT,
@@ -39,13 +69,13 @@ const initializeDatabase = async () => {
       )
     `);
 
-    // Sessions table (device fingerprinting, max 2 devices)
+    // Sessions
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS user_sessions (
         id INT PRIMARY KEY AUTO_INCREMENT,
         user_id INT NOT NULL,
-        session_token VARCHAR(255) UNIQUE NOT NULL,
-        refresh_token VARCHAR(255) UNIQUE,
+        session_token VARCHAR(500) UNIQUE NOT NULL,
+        refresh_token VARCHAR(500),
         device_fingerprint VARCHAR(255) NOT NULL,
         device_info TEXT,
         ip_address VARCHAR(45),
@@ -54,22 +84,21 @@ const initializeDatabase = async () => {
         is_active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-        INDEX idx_user_sessions (user_id),
-        INDEX idx_session_token (session_token)
+        INDEX idx_user_sessions (user_id)
       )
     `);
 
-    // Payments table
+    // Payments
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS payments (
         id INT PRIMARY KEY AUTO_INCREMENT,
         user_id INT NOT NULL,
         intasend_invoice_id VARCHAR(255),
         intasend_tracking_id VARCHAR(255),
-        payment_method ENUM('mpesa', 'airtel_money', 'card') NOT NULL,
+        payment_method ENUM('mpesa','airtel_money','card') NOT NULL,
         amount DECIMAL(10,2) NOT NULL,
         currency VARCHAR(10) DEFAULT 'KES',
-        status ENUM('pending', 'completed', 'failed', 'refunded') DEFAULT 'pending',
+        status ENUM('pending','completed','failed','refunded') DEFAULT 'pending',
         payment_data_encrypted TEXT,
         paid_at DATETIME,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -78,17 +107,17 @@ const initializeDatabase = async () => {
       )
     `);
 
-    // MT5 accounts table
+    // MT5 accounts
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS mt5_accounts (
         id INT PRIMARY KEY AUTO_INCREMENT,
         user_id INT NOT NULL,
-        login_id VARCHAR(100) NOT NULL,
+        login_id VARCHAR(255) NOT NULL,
         password_encrypted TEXT NOT NULL,
         broker VARCHAR(100) DEFAULT 'FxPro',
         server VARCHAR(150),
         selected_pairs JSON,
-        timeframe ENUM('M1', 'M5') DEFAULT 'M1',
+        timeframe ENUM('M1','M5') DEFAULT 'M1',
         lot_size DECIMAL(5,2) DEFAULT 0.01,
         is_connected BOOLEAN DEFAULT FALSE,
         last_connected DATETIME,
@@ -99,7 +128,7 @@ const initializeDatabase = async () => {
       )
     `);
 
-    // Trades table
+    // Trades
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS trades (
         id INT PRIMARY KEY AUTO_INCREMENT,
@@ -107,14 +136,14 @@ const initializeDatabase = async () => {
         mt5_account_id INT NOT NULL,
         ticket VARCHAR(100),
         symbol VARCHAR(20) NOT NULL,
-        trade_type ENUM('BUY', 'SELL') NOT NULL,
+        trade_type ENUM('BUY','SELL') NOT NULL,
         lot_size DECIMAL(5,2) NOT NULL,
         open_price DECIMAL(15,5),
         close_price DECIMAL(15,5),
         stop_loss DECIMAL(15,5),
         take_profit DECIMAL(15,5),
         profit_loss DECIMAL(15,2),
-        status ENUM('open', 'closed', 'cancelled') DEFAULT 'open',
+        status ENUM('open','closed','cancelled') DEFAULT 'open',
         open_time DATETIME,
         close_time DATETIME,
         signal_data JSON,
@@ -126,7 +155,7 @@ const initializeDatabase = async () => {
       )
     `);
 
-    // Trading stats table
+    // Trading stats
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS trading_stats (
         id INT PRIMARY KEY AUTO_INCREMENT,
@@ -158,14 +187,14 @@ const initializeDatabase = async () => {
         details TEXT,
         ip_address VARCHAR(45),
         device_fingerprint VARCHAR(255),
-        status ENUM('success', 'failed', 'warning') DEFAULT 'success',
+        status ENUM('success','failed','warning') DEFAULT 'success',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_audit_user (user_id),
         INDEX idx_audit_action (action)
       )
     `);
 
-    // Admin table
+    // Admins
     await conn.execute(`
       CREATE TABLE IF NOT EXISTS admins (
         id INT PRIMARY KEY AUTO_INCREMENT,
@@ -178,9 +207,9 @@ const initializeDatabase = async () => {
       )
     `);
 
-    console.log('✅ Database tables initialized successfully');
+    console.log('✅ All database tables ready');
   } catch (error) {
-    console.error('❌ Database initialization error:', error);
+    console.error('❌ Table creation error:', error.message);
     throw error;
   } finally {
     conn.release();

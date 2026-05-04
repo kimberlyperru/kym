@@ -2,9 +2,10 @@
 import React from 'react';
 
 const EVENT_ICONS = {
-  bot_started:      { icon: '▶', color: '#22c55e' },
+  bot_started:      { icon: '▶',  color: '#22c55e' },
   bot_stopped:      { icon: '⏹', color: '#e53e3e' },
   trade_opened:     { icon: '📈', color: '#1e90ff' },
+  trade_failed:     { icon: '❌', color: '#e53e3e' },
   positions_closed: { icon: '🔒', color: '#f59e0b' },
   profit_cycle:     { icon: '🔄', color: '#22c55e' },
   signal:           { icon: '📡', color: '#1e90ff' },
@@ -12,6 +13,49 @@ const EVENT_ICONS = {
   bot_error:        { icon: '⚠️', color: '#e53e3e' },
   session_update:   { icon: '🌍', color: '#718096' },
   default:          { icon: '•',  color: '#718096' }
+};
+
+// Safely convert ANY value to a display string — never returns an object
+const safeString = (val) => {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string')  return val;
+  if (typeof val === 'number')  return String(val);
+  if (typeof val === 'boolean') return val ? 'true' : 'false';
+  if (Array.isArray(val))       return val.join(', ');
+  if (typeof val === 'object')  {
+    // Try common message keys first
+    if (val.message) return String(val.message);
+    if (val.error)   return String(val.error);
+    if (val.detail)  return String(val.detail);
+    return JSON.stringify(val).slice(0, 120);
+  }
+  return String(val);
+};
+
+// Build a clean readable message for each event type
+const buildMessage = (event) => {
+  if (event.message && typeof event.message === 'string') return event.message;
+
+  switch (event.type) {
+    case 'signal':
+      return `${safeString(event.symbol)} — ${safeString(event.signal)} — ${safeString(event.confidence)}% confidence`;
+    case 'bot_update':
+      return `Balance $${safeString(event.balance)} · P/L $${safeString(event.profit)} · ${safeString(event.positions)} positions · Risk: ${safeString(event.risk?.level || event.risk)}`;
+    case 'trade_opened':
+      return `Opened ${safeString(event.action)} ${safeString(event.symbol)} @ ${safeString(event.price)} (${safeString(event.lotSize)} lots)`;
+    case 'trade_failed':
+      return `Trade failed: ${safeString(event.error)}`;
+    case 'bot_error':
+      return `Error: ${safeString(event.message || event.error)}`;
+    case 'positions_closed':
+      return `All positions closed — ${safeString(event.reason)}`;
+    case 'profit_cycle':
+      return safeString(event.message || `Lot size increased to ${event.newLotSize}`);
+    case 'session_update':
+      return safeString(event.message);
+    default:
+      return safeString(event.message) || `${event.type} event`;
+  }
 };
 
 const EventLog = ({ events = [] }) => {
@@ -37,23 +81,17 @@ const EventLog = ({ events = [] }) => {
             </div>
           </div>
         ) : events.map(event => {
-          const style = getStyle(event.type);
+          const style   = getStyle(event.type);
+          const message = buildMessage(event);
           return (
             <div key={event.id}
               className="flex items-start gap-2 p-2 rounded-lg text-xs transition-all hover:bg-white/5"
               style={{ borderLeft: `2px solid ${style.color}33` }}>
               <span className="shrink-0 mt-0.5" style={{ color: style.color }}>{style.icon}</span>
               <div className="flex-1 min-w-0">
-                <span className="text-kym-text leading-snug">
-                  {event.message || JSON.stringify(event).slice(0, 120)}
-                </span>
-                {event.signal && (
-                  <span className="ml-2 font-mono font-bold" style={{ color: event.signal === 'BUY' ? '#22c55e' : '#e53e3e' }}>
-                    {event.signal}
-                  </span>
-                )}
+                <span className="text-kym-text leading-snug break-words">{message}</span>
               </div>
-              <span className="shrink-0 text-kym-muted font-mono">{event.time}</span>
+              <span className="shrink-0 text-kym-muted font-mono whitespace-nowrap">{event.time}</span>
             </div>
           );
         })}
