@@ -1,37 +1,34 @@
-// backend/server.js
-const express = require('express');
-const cors    = require('cors');
-const helmet  = require('helmet');
-const compression = require('compression');
-const morgan  = require('morgan');
-const http    = require('http');
-const WebSocket = require('ws');
+// server.js — works on Railway, Render, Koyeb, Heroku, local
+const express    = require('express');
+const cors       = require('cors');
+const helmet     = require('helmet');
+const compression= require('compression');
+const http       = require('http');
+const WebSocket  = require('ws');
 require('dotenv').config();
 
-// ── Print ALL env vars on startup so Render logs show exactly what's missing ──
-console.log('\n🔍 Environment check:');
-const REQUIRED_VARS = [
+// ── 1. Check required environment variables ───────────────────────────────────
+const REQUIRED = [
   'DB_HOST','DB_NAME','DB_USER','DB_PASSWORD',
   'JWT_SECRET','JWT_REFRESH_SECRET','ENCRYPTION_KEY',
   'ADMIN_SECRET_PATH','FRONTEND_URL'
 ];
-let missingVars = [];
-REQUIRED_VARS.forEach(key => {
-  const val = process.env[key];
-  if (!val) {
-    console.error(`   ❌ ${key} — NOT SET`);
-    missingVars.push(key);
-  } else {
-    console.log(`   ✅ ${key} — set`);
-  }
+
+console.log('\n=== KYM STARTUP CHECK ===');
+const missing = [];
+REQUIRED.forEach(k => {
+  if (!process.env[k]) { console.error(`  ❌ MISSING: ${k}`); missing.push(k); }
+  else                  { console.log (`  ✅ OK: ${k}`); }
 });
 
-if (missingVars.length > 0) {
-  console.error(`\n❌ FATAL: Missing required environment variables: ${missingVars.join(', ')}`);
-  console.error('   Add these in your Render dashboard → Environment tab\n');
+if (missing.length > 0) {
+  console.error(`\nFATAL: ${missing.length} required env vars missing: ${missing.join(', ')}`);
+  console.error('Add them in your hosting platform environment settings.\n');
   process.exit(1);
 }
+console.log('=========================\n');
 
+// ── 2. Load everything AFTER env check ───────────────────────────────────────
 const { initializeDatabase } = require('./config/database');
 const { createInitialAdmin } = require('./controllers/adminController');
 const { generalLimiter }     = require('./middleware/rateLimiter');
@@ -45,10 +42,10 @@ const botRoutes     = require('./routes/bot');
 const app    = express();
 const server = http.createServer(app);
 
-// Trust proxy — required on Render (sits behind a load balancer)
+// ── 3. Trust proxy (required on all cloud platforms) ─────────────────────────
 app.set('trust proxy', 1);
 
-// ── WebSocket ──────────────────────────────────────────────────────────────────
+// ── 4. WebSocket ──────────────────────────────────────────────────────────────
 const wss     = new WebSocket.Server({ server, path: '/ws' });
 const clients = new Map();
 
@@ -62,11 +59,11 @@ wss.on('connection', (ws, req) => {
 
     if (!clients.has(userId)) clients.set(userId, new Set());
     clients.get(userId).add(ws);
-    ws.send(JSON.stringify({ type: 'connected', message: 'WebSocket connected' }));
+    ws.send(JSON.stringify({ type: 'connected', message: 'Connected' }));
 
     const ping = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) ws.ping();
-    }, 30000);
+    }, 25000);
 
     ws.on('close', () => {
       clearInterval(ping);
@@ -76,9 +73,7 @@ wss.on('connection', (ws, req) => {
       }
     });
     ws.on('error', () => { clearInterval(ping); ws.close(); });
-
-  } catch (e) {
-    ws.send(JSON.stringify({ type: 'error', message: 'Invalid token' }));
+  } catch {
     ws.close();
   }
 });
@@ -92,12 +87,10 @@ const broadcastToUser = (userId, data) => {
 };
 app.set('broadcast', broadcastToUser);
 
-// ── Middleware ─────────────────────────────────────────────────────────────────
+// ── 5. Middleware ─────────────────────────────────────────────────────────────
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(compression());
-if (process.env.NODE_ENV !== 'production') app.use(morgan('dev'));
 
-// CORS — allow frontend URL + localhost for dev
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   'http://localhost:3000',
@@ -106,77 +99,67 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, cb) => {
-    // Allow requests with no origin (mobile apps, curl) and allowed origins
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-    console.warn('CORS blocked:', origin);
-    cb(new Error('Not allowed by CORS'));
+    if (!origin || allowedOrigins.some(o => origin.startsWith(o.replace(/\/$/, '')))) {
+      return cb(null, true);
+    }
+    cb(new Error(`CORS: ${origin} not allowed`));
   },
   credentials: true,
-  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization','X-Device-Fingerprint']
+  methods:      ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders:['Content-Type','Authorization','X-Device-Fingerprint']
 }));
 
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(generalLimiter);
 
-// ── Routes ─────────────────────────────────────────────────────────────────────
+// ── 6. Routes ─────────────────────────────────────────────────────────────────
 app.use('/api/auth',    authRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/mt5',     mt5Routes);
 app.use('/api/bot',     botRoutes);
+app.use(`/${process.env.ADMIN_SECRET_PATH}/api`, adminRoutes);
 
-const adminPath = `/${process.env.ADMIN_SECRET_PATH}/api`;
-app.use(adminPath, adminRoutes);
-
-// Health — Render uses this to confirm the service is up
-app.get('/health',      (_req, res) => res.json({ status: 'OK', env: process.env.NODE_ENV, ts: new Date().toISOString() }));
-app.get('/',            (_req, res) => res.json({ service: 'Kym Trading Bot API', status: 'running' }));
+// Health check — platforms use this to verify service is alive
+app.get('/health', (_req, res) =>
+  res.json({ status: 'OK', env: process.env.NODE_ENV, ts: new Date().toISOString() })
+);
+app.get('/', (_req, res) =>
+  res.json({ service: 'Kym Trading Bot API', status: 'running' })
+);
 app.get('/api/session', (_req, res) => {
   const { getTradingSession } = require('./services/analysisService');
   return res.json(getTradingSession());
 });
 
-// 404
-app.use((_req, res) => res.status(404).json({ error: 'Endpoint not found' }));
-
-// Global error handler
+app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 app.use((err, _req, res, _next) => {
-  console.error('Unhandled error:', err.message);
+  console.error('Error:', err.message);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// ── Start ──────────────────────────────────────────────────────────────────────
+// ── 7. Start ──────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
   try {
-    console.log('\n🔄 Connecting to database...');
+    console.log('Connecting to database...');
     await initializeDatabase();
 
-    console.log('🔄 Creating admin account if needed...');
+    console.log('Creating admin account...');
     await createInitialAdmin();
 
+    // IMPORTANT: listen on 0.0.0.0 not just localhost
     server.listen(PORT, '0.0.0.0', () => {
-      console.log(`
-  ██╗  ██╗██╗   ██╗███╗   ███╗
-  ██║ ██╔╝╚██╗ ██╔╝████╗ ████║
-  █████╔╝  ╚████╔╝ ██╔████╔██║
-  ██╔═██╗   ╚██╔╝  ██║╚██╔╝██║
-  ██║  ██╗   ██║   ██║ ╚═╝ ██║
-
-  ✅ Kym Trading Bot running
-  🌐 Port : ${PORT}
-  🌍 Env  : ${process.env.NODE_ENV}
-  🔒 Admin: /${process.env.ADMIN_SECRET_PATH}/api
-      `);
+      console.log(`\n✅ Kym server running on port ${PORT}`);
+      console.log(`   Env   : ${process.env.NODE_ENV}`);
+      console.log(`   Admin : /${process.env.ADMIN_SECRET_PATH}/api`);
     });
-  } catch (error) {
-    // Print FULL error so Render logs show exactly what failed
-    console.error('\n❌ Failed to start server:');
-    console.error('   Message:', error.message);
-    console.error('   Code   :', error.code);
-    console.error('   Stack  :', error.stack);
+  } catch (err) {
+    console.error('\n❌ SERVER FAILED TO START:');
+    console.error('   Message:', err.message);
+    console.error('   Code   :', err.code);
+    console.error('   Stack  :\n', err.stack);
     process.exit(1);
   }
 };

@@ -1,0 +1,11 @@
+# nixpacks.toml — place this in your backend/ folder
+# This tells Railway exactly how to build and start the server
+
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+
+[phases.install]
+cmds = ["npm install --production"]
+
+[start]
+cmd = "node server.js"
