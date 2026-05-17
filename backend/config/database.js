@@ -1,59 +1,82 @@
-// config/database.js
+// backend/config/database.js
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
-console.log('\n--- DB Connection ---');
-console.log('Host    :', process.env.DB_HOST     || 'MISSING');
-console.log('Port    :', process.env.DB_PORT     || '3306');
-console.log('Database:', process.env.DB_NAME     || 'MISSING');
-console.log('User    :', process.env.DB_USER     || 'MISSING');
-console.log('Password:', process.env.DB_PASSWORD ? 'SET' : 'MISSING');
-console.log('SSL     :', process.env.DB_SSL      || 'false');
-console.log('--------------------\n');
+// Railway provides a special internal URL — use it if available
+// Format: mysql://user:pass@host:port/dbname
+const DATABASE_URL = process.env.DATABASE_URL || process.env.MYSQL_URL || process.env.MYSQL_PRIVATE_URL;
 
-const poolConfig = {
-  host:               process.env.DB_HOST,
-  port:               parseInt(process.env.DB_PORT) || 3306,
-  database:           process.env.DB_NAME,
-  user:               process.env.DB_USER,
-  password:           process.env.DB_PASSWORD,
-  waitForConnections: true,
-  connectionLimit:    5,
-  queueLimit:         0,
-  connectTimeout:     60000,
-  timezone:           '+00:00',
-  charset:            'utf8mb4'
-};
+let poolConfig;
 
-// Enable SSL for cloud databases (Railway, PlanetScale, Clever Cloud, etc.)
-if (process.env.DB_SSL === 'true') {
-  poolConfig.ssl = { rejectUnauthorized: false };
-  console.log('SSL: enabled for database');
+if (DATABASE_URL) {
+  // Parse the full connection URL (Railway gives this)
+  console.log('✅ Using DATABASE_URL connection string');
+  poolConfig = {
+    uri:                DATABASE_URL,
+    waitForConnections: true,
+    connectionLimit:    5,
+    connectTimeout:     60000,
+    timezone:           '+00:00',
+    ssl:                { rejectUnauthorized: false }
+  };
+} else {
+  // Fallback: individual env vars (local dev)
+  console.log('📋 DB Config:', {
+    host:     process.env.DB_HOST     || '❌ MISSING',
+    port:     process.env.DB_PORT     || '3306',
+    database: process.env.DB_NAME     || '❌ MISSING',
+    user:     process.env.DB_USER     || '❌ MISSING',
+    password: process.env.DB_PASSWORD ? '✅ set' : '❌ MISSING',
+    ssl:      process.env.DB_SSL      || 'false'
+  });
+
+  poolConfig = {
+    host:               process.env.DB_HOST,
+    port:               parseInt(process.env.DB_PORT) || 3306,
+    database:           process.env.DB_NAME,
+    user:               process.env.DB_USER,
+    password:           process.env.DB_PASSWORD,
+    waitForConnections: true,
+    connectionLimit:    5,
+    connectTimeout:     60000,
+    timezone:           '+00:00'
+  };
+
+  if (process.env.DB_SSL === 'true') {
+    poolConfig.ssl = { rejectUnauthorized: false };
+    console.log('🔒 DB SSL enabled');
+  }
 }
 
 const pool = mysql.createPool(poolConfig);
 
 const initializeDatabase = async () => {
-  // Test connection first
-  let conn;
-  try {
-    conn = await pool.getConnection();
-    await conn.execute('SELECT 1');
-    console.log('✅ Database connection OK');
-    conn.release();
-  } catch (err) {
-    console.error('❌ DATABASE CONNECTION FAILED');
-    console.error('   Error:', err.message);
-    console.error('   Code :', err.code);
-    console.error('\n   Possible causes:');
-    console.error('   1. DB_HOST is wrong — check your database dashboard');
-    console.error('   2. DB_SSL should be "true" for cloud databases');
-    console.error('   3. Your database IP whitelist — add 0.0.0.0/0');
-    console.error('   4. DB credentials wrong\n');
-    throw err;
+  // Test connection with retries
+  let lastError;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      const conn = await pool.getConnection();
+      await conn.execute('SELECT 1');
+      conn.release();
+      console.log('✅ Database connected');
+      break;
+    } catch (err) {
+      lastError = err;
+      console.error(`❌ DB connection attempt ${attempt}/5 failed: ${err.message}`);
+      if (attempt < 5) {
+        console.log(`   Retrying in ${attempt * 2}s...`);
+        await new Promise(r => setTimeout(r, attempt * 2000));
+      }
+    }
+  }
+  if (lastError && lastError.code === 'ECONNREFUSED') {
+    console.error('\n💡 ECONNREFUSED troubleshooting:');
+    console.error('   Railway: Add DATABASE_URL variable from MySQL service → Connect tab');
+    console.error('   The format is: mysql://user:pass@host:port/dbname\n');
+    throw lastError;
   }
 
-  conn = await pool.getConnection();
+  const conn = await pool.getConnection();
   try {
     await conn.execute(`CREATE TABLE IF NOT EXISTS users (
       id INT PRIMARY KEY AUTO_INCREMENT,
@@ -71,7 +94,6 @@ const initializeDatabase = async () => {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )`);
-
     await conn.execute(`CREATE TABLE IF NOT EXISTS user_sessions (
       id INT PRIMARY KEY AUTO_INCREMENT,
       user_id INT NOT NULL,
@@ -87,7 +109,6 @@ const initializeDatabase = async () => {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       INDEX idx_user_sessions (user_id)
     )`);
-
     await conn.execute(`CREATE TABLE IF NOT EXISTS payments (
       id INT PRIMARY KEY AUTO_INCREMENT,
       user_id INT NOT NULL,
@@ -103,7 +124,6 @@ const initializeDatabase = async () => {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       INDEX idx_user_payments (user_id)
     )`);
-
     await conn.execute(`CREATE TABLE IF NOT EXISTS mt5_accounts (
       id INT PRIMARY KEY AUTO_INCREMENT,
       user_id INT NOT NULL,
@@ -121,7 +141,6 @@ const initializeDatabase = async () => {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       UNIQUE KEY unique_user_mt5 (user_id)
     )`);
-
     await conn.execute(`CREATE TABLE IF NOT EXISTS trades (
       id INT PRIMARY KEY AUTO_INCREMENT,
       user_id INT NOT NULL,
@@ -144,7 +163,6 @@ const initializeDatabase = async () => {
       FOREIGN KEY (mt5_account_id) REFERENCES mt5_accounts(id) ON DELETE CASCADE,
       INDEX idx_user_trades (user_id)
     )`);
-
     await conn.execute(`CREATE TABLE IF NOT EXISTS trading_stats (
       id INT PRIMARY KEY AUTO_INCREMENT,
       user_id INT NOT NULL,
@@ -158,7 +176,6 @@ const initializeDatabase = async () => {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       UNIQUE KEY unique_user_session (user_id, session_date)
     )`);
-
     await conn.execute(`CREATE TABLE IF NOT EXISTS audit_logs (
       id INT PRIMARY KEY AUTO_INCREMENT,
       user_id INT,
@@ -170,7 +187,6 @@ const initializeDatabase = async () => {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_audit_user (user_id)
     )`);
-
     await conn.execute(`CREATE TABLE IF NOT EXISTS admins (
       id INT PRIMARY KEY AUTO_INCREMENT,
       email VARCHAR(150) UNIQUE NOT NULL,
@@ -180,7 +196,6 @@ const initializeDatabase = async () => {
       last_login DATETIME,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`);
-
     console.log('✅ All tables ready');
   } finally {
     conn.release();
