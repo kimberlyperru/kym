@@ -1,15 +1,11 @@
-# netlify.toml — place this in your frontend/ folder
-# Tells Netlify how to build and serve the React app
-
 [build]
-  command   = "npm install && npm run build"
+  command   = "npm run build"
   publish   = "build"
 
 [build.environment]
   NODE_VERSION = "18"
   CI           = "false"
 
-# All routes redirect to index.html (required for React Router)
 [[redirects]]
   from   = "/*"
   to     = "/index.html"
