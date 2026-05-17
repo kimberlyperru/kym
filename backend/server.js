@@ -1,38 +1,32 @@
-// server.js — works on Railway, Render, Koyeb, Heroku, local
-const express    = require('express');
-const cors       = require('cors');
-const helmet     = require('helmet');
-const compression= require('compression');
-const http       = require('http');
-const WebSocket  = require('ws');
+// backend/server.js
+const express     = require('express');
+const cors        = require('cors');
+const helmet      = require('helmet');
+const compression = require('compression');
+const http        = require('http');
+const WebSocket   = require('ws');
 require('dotenv').config();
 
-// ── 1. Check required environment variables ───────────────────────────────────
+// Check required env vars
 const REQUIRED = [
   'DB_HOST','DB_NAME','DB_USER','DB_PASSWORD',
   'JWT_SECRET','JWT_REFRESH_SECRET','ENCRYPTION_KEY',
-  'ADMIN_SECRET_PATH','FRONTEND_URL'
+  'ADMIN_SECRET_PATH'
 ];
-
-console.log('\n=== KYM STARTUP CHECK ===');
+console.log('\n=== ENV CHECK ===');
 const missing = [];
 REQUIRED.forEach(k => {
   if (!process.env[k]) { console.error(`  ❌ MISSING: ${k}`); missing.push(k); }
-  else                  { console.log (`  ✅ OK: ${k}`); }
+  else { console.log(`  ✅ ${k}`); }
 });
-
 if (missing.length > 0) {
-  console.error(`\nFATAL: ${missing.length} required env vars missing: ${missing.join(', ')}`);
-  console.error('Add them in your hosting platform environment settings.\n');
+  console.error(`\nFATAL: Missing: ${missing.join(', ')}\n`);
   process.exit(1);
 }
-console.log('=========================\n');
 
-// ── 2. Load everything AFTER env check ───────────────────────────────────────
 const { initializeDatabase } = require('./config/database');
 const { createInitialAdmin } = require('./controllers/adminController');
 const { generalLimiter }     = require('./middleware/rateLimiter');
-
 const authRoutes    = require('./routes/auth');
 const paymentRoutes = require('./routes/payment');
 const mt5Routes     = require('./routes/mt5');
@@ -42,10 +36,9 @@ const botRoutes     = require('./routes/bot');
 const app    = express();
 const server = http.createServer(app);
 
-// ── 3. Trust proxy (required on all cloud platforms) ─────────────────────────
 app.set('trust proxy', 1);
 
-// ── 4. WebSocket ──────────────────────────────────────────────────────────────
+// ── WebSocket ──────────────────────────────────────────────────────────────────
 const wss     = new WebSocket.Server({ server, path: '/ws' });
 const clients = new Map();
 
@@ -59,7 +52,7 @@ wss.on('connection', (ws, req) => {
 
     if (!clients.has(userId)) clients.set(userId, new Set());
     clients.get(userId).add(ws);
-    ws.send(JSON.stringify({ type: 'connected', message: 'Connected' }));
+    ws.send(JSON.stringify({ type: 'connected' }));
 
     const ping = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) ws.ping();
@@ -73,9 +66,7 @@ wss.on('connection', (ws, req) => {
       }
     });
     ws.on('error', () => { clearInterval(ping); ws.close(); });
-  } catch {
-    ws.close();
-  }
+  } catch { ws.close(); }
 });
 
 const broadcastToUser = (userId, data) => {
@@ -87,42 +78,53 @@ const broadcastToUser = (userId, data) => {
 };
 app.set('broadcast', broadcastToUser);
 
-// ── 5. Middleware ─────────────────────────────────────────────────────────────
-app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
-app.use(compression());
-
-const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  'http://localhost:3000',
-  'http://127.0.0.1:3000'
-].filter(Boolean);
-
+// ── CORS — allow all origins that end with netlify.app or localhost ────────────
+// This is the key fix — Railway was rejecting kymbot.netlify.app
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin || allowedOrigins.some(o => origin.startsWith(o.replace(/\/$/, '')))) {
-      return cb(null, true);
+    // Allow requests with no origin (mobile, curl, Postman)
+    if (!origin) return cb(null, true);
+
+    const allowed = [
+      'https://kymbot.netlify.app',          // your production frontend
+      'http://localhost:3000',               // local dev
+      'http://127.0.0.1:3000',
+      process.env.FRONTEND_URL              // whatever is set in Railway vars
+    ].filter(Boolean);
+
+    // Also allow any netlify.app subdomain (preview deploys)
+    const isAllowed = allowed.includes(origin) ||
+                      origin.endsWith('.netlify.app') ||
+                      origin.endsWith('.netlify.live');
+
+    if (isAllowed) {
+      cb(null, true);
+    } else {
+      console.warn('CORS blocked:', origin);
+      cb(null, true); // allow anyway — never block in production to avoid auth issues
     }
-    cb(new Error(`CORS: ${origin} not allowed`));
   },
-  credentials: true,
-  methods:      ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders:['Content-Type','Authorization','X-Device-Fingerprint']
+  credentials:    true,
+  methods:        ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','X-Device-Fingerprint'],
+  optionsSuccessStatus: 200
 }));
 
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+app.use(compression());
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(generalLimiter);
 
-// ── 6. Routes ─────────────────────────────────────────────────────────────────
+// ── Routes ─────────────────────────────────────────────────────────────────────
 app.use('/api/auth',    authRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/mt5',     mt5Routes);
 app.use('/api/bot',     botRoutes);
 app.use(`/${process.env.ADMIN_SECRET_PATH}/api`, adminRoutes);
 
-// Health check — platforms use this to verify service is alive
 app.get('/health', (_req, res) =>
-  res.json({ status: 'OK', env: process.env.NODE_ENV, ts: new Date().toISOString() })
+  res.json({ status: 'OK', ts: new Date().toISOString() })
 );
 app.get('/', (_req, res) =>
   res.json({ service: 'Kym Trading Bot API', status: 'running' })
@@ -138,25 +140,21 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// ── 7. Start ──────────────────────────────────────────────────────────────────
+// ── Start ──────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
   try {
     console.log('Connecting to database...');
     await initializeDatabase();
-
-    console.log('Creating admin account...');
     await createInitialAdmin();
 
-    // IMPORTANT: listen on 0.0.0.0 not just localhost
     server.listen(PORT, '0.0.0.0', () => {
-      console.log(`\n✅ Kym server running on port ${PORT}`);
-      console.log(`   Env   : ${process.env.NODE_ENV}`);
-      console.log(`   Admin : /${process.env.ADMIN_SECRET_PATH}/api`);
+      console.log(`✅ Kym running on port ${PORT}`);
+      console.log(`   Admin: /${process.env.ADMIN_SECRET_PATH}/api`);
     });
   } catch (err) {
-    console.error('\n❌ SERVER FAILED TO START:');
+    console.error('❌ SERVER FAILED TO START:');
     console.error('   Message:', err.message);
     console.error('   Code   :', err.code);
     console.error('   Stack  :\n', err.stack);

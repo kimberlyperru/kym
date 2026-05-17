@@ -4,7 +4,10 @@ import toast from 'react-hot-toast';
 import axios from 'axios';
 import Footer from '../components/common/Footer';
 
-const ADMIN_BASE = `/${process.env.REACT_APP_ADMIN_PATH || 'kym-admin-x9z'}/api`;
+// ── Fix: read from env var, never hardcode localhost ─────────────────────────
+const API_BASE   = process.env.REACT_APP_API_URL || '';
+const ADMIN_PATH = process.env.REACT_APP_ADMIN_PATH || 'id-1334';
+const ADMIN_BASE = `${API_BASE}/${ADMIN_PATH}/api`;
 
 const adminApi = axios.create({ baseURL: ADMIN_BASE, timeout: 15000 });
 adminApi.interceptors.request.use(c => {
@@ -13,9 +16,9 @@ adminApi.interceptors.request.use(c => {
   return c;
 });
 
-// ── Login ────────────────────────────────────────────────────────────────────
+// ── Admin Login ───────────────────────────────────────────────────────────────
 const AdminLogin = ({ onLogin }) => {
-  const [form, setForm] = useState({ email: '', password: '' });
+  const [form,    setForm]    = useState({ email: '', password: '' });
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async (e) => {
@@ -25,9 +28,12 @@ const AdminLogin = ({ onLogin }) => {
       const res = await adminApi.post('/login', form);
       localStorage.setItem('kym_admin_token', res.data.token);
       onLogin(res.data.admin);
+      toast.success('Admin logged in');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Invalid credentials');
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -42,34 +48,33 @@ const AdminLogin = ({ onLogin }) => {
           <p className="text-kym-muted text-xs mt-1">Kym Control Panel</p>
         </div>
         <form onSubmit={handleLogin} className="space-y-4">
-          <input className="kym-input" type="email" placeholder="Admin email" value={form.email}
-            onChange={e => setForm(p => ({ ...p, email: e.target.value }))} required />
-          <input className="kym-input" type="password" placeholder="Password" value={form.password}
-            onChange={e => setForm(p => ({ ...p, password: e.target.value }))} required />
+          <input className="kym-input" type="email" placeholder="Admin email"
+            value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} required />
+          <input className="kym-input" type="password" placeholder="Password"
+            value={form.password} onChange={e => setForm(p => ({ ...p, password: e.target.value }))} required />
           <button className="btn-danger w-full" disabled={loading}>
-            {loading ? <span className="flex items-center justify-center gap-2"><span className="spinner" />...</span> : 'Access Panel'}
+            {loading
+              ? <span className="flex items-center justify-center gap-2"><span className="spinner" />Logging in...</span>
+              : 'Access Panel'}
           </button>
         </form>
-        <div className="fixed bottom-0 left-0 right-0">
-          <Footer minimal />
-        </div>
       </div>
+      <div className="fixed bottom-0 left-0 right-0"><Footer minimal /></div>
     </div>
   );
 };
 
-// ── Main Admin ────────────────────────────────────────────────────────────────
+// ── Main Admin Panel ──────────────────────────────────────────────────────────
 const AdminPage = () => {
-  const [admin, setAdmin] = useState(() => {
+  const [admin,     setAdmin]     = useState(() => {
     const t = localStorage.getItem('kym_admin_token');
     return t ? { loggedIn: true } : null;
   });
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [stats, setStats] = useState(null);
-  const [users, setUsers] = useState([]);
-  const [logs, setLogs] = useState([]);
-  const [userSearch, setUserSearch] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [stats,     setStats]     = useState(null);
+  const [users,     setUsers]     = useState([]);
+  const [logs,      setLogs]      = useState([]);
+  const [search,    setSearch]    = useState('');
 
   const fetchDashboard = useCallback(async () => {
     try {
@@ -85,10 +90,10 @@ const AdminPage = () => {
 
   const fetchUsers = useCallback(async () => {
     try {
-      const res = await adminApi.get(`/users?search=${userSearch}`);
+      const res = await adminApi.get(`/users?search=${search}`);
       setUsers(res.data.users || []);
     } catch {}
-  }, [userSearch]);
+  }, [search]);
 
   const fetchLogs = useCallback(async () => {
     try {
@@ -103,14 +108,15 @@ const AdminPage = () => {
   }, [admin, fetchDashboard]);
 
   useEffect(() => {
-    if (activeTab === 'users') fetchUsers();
-    if (activeTab === 'logs') fetchLogs();
-  }, [activeTab, fetchUsers, fetchLogs]);
+    if (!admin) return;
+    if (activeTab === 'users')   fetchUsers();
+    if (activeTab === 'logs')    fetchLogs();
+  }, [activeTab, admin, fetchUsers, fetchLogs]);
 
-  const toggleUser = async (userId, currentStatus) => {
+  const toggleUser = async (userId) => {
     try {
       await adminApi.patch(`/users/${userId}/status`);
-      toast.success(`User ${currentStatus ? 'deactivated' : 'activated'}`);
+      toast.success('User status updated');
       fetchUsers();
     } catch { toast.error('Failed'); }
   };
@@ -119,14 +125,15 @@ const AdminPage = () => {
 
   const navItems = [
     { id: 'dashboard', icon: '📊', label: 'Dashboard' },
-    { id: 'users', icon: '👥', label: 'Users' },
-    { id: 'logs', icon: '📋', label: 'Audit Logs' }
+    { id: 'users',     icon: '👥', label: 'Users'     },
+    { id: 'logs',      icon: '📋', label: 'Audit Logs'}
   ];
 
   return (
     <div className="min-h-screen flex bg-kym-black">
       {/* Sidebar */}
-      <aside className="w-52 border-r border-kym-border flex flex-col" style={{ background: 'rgba(13,17,23,0.98)' }}>
+      <aside className="w-52 border-r border-kym-border flex flex-col"
+        style={{ background: 'rgba(13,17,23,0.98)' }}>
         <div className="p-5 border-b border-kym-border">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg flex items-center justify-center"
@@ -145,15 +152,17 @@ const AdminPage = () => {
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all"
               style={{
                 background: activeTab === item.id ? '#e53e3e18' : 'transparent',
-                color: activeTab === item.id ? '#e53e3e' : '#718096'
+                color:      activeTab === item.id ? '#e53e3e'   : '#718096'
               }}>
-              <span>{item.icon}</span><span className="font-medium">{item.label}</span>
+              <span>{item.icon}</span>
+              <span className="font-medium">{item.label}</span>
             </button>
           ))}
         </nav>
         <div className="p-4 border-t border-kym-border">
-          <button onClick={() => { localStorage.removeItem('kym_admin_token'); setAdmin(null); }}
-            className="w-full text-xs text-kym-muted hover:text-kym-red transition-colors flex items-center gap-2">
+          <button
+            onClick={() => { localStorage.removeItem('kym_admin_token'); setAdmin(null); }}
+            className="w-full text-xs text-kym-muted hover:text-kym-red transition-colors flex items-center gap-2 px-3 py-2">
             <span>🚪</span> Logout
           </button>
         </div>
@@ -168,11 +177,11 @@ const AdminPage = () => {
             <h2 className="font-display text-lg font-bold text-white tracking-wide">Dashboard</h2>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               {[
-                { k: 'Total Users', v: stats.totalUsers, c: '#1e90ff', i: '👥' },
-                { k: 'Paid Users', v: stats.paidUsers, c: '#22c55e', i: '💳' },
-                { k: 'Total Trades', v: stats.totalTrades, c: '#f59e0b', i: '📈' },
-                { k: 'Revenue (KES)', v: `${stats.totalRevenue?.toFixed(2)}`, c: '#22c55e', i: '💰' },
-                { k: 'Active Sessions', v: stats.activeSessions, c: '#1e90ff', i: '⚡' }
+                { k: 'Total Users',      v: stats.totalUsers,              c: '#1e90ff', i: '👥' },
+                { k: 'Paid Users',       v: stats.paidUsers,               c: '#22c55e', i: '💳' },
+                { k: 'Total Trades',     v: stats.totalTrades,             c: '#f59e0b', i: '📈' },
+                { k: 'Revenue (KES)',    v: parseFloat(stats.totalRevenue || 0).toFixed(2), c: '#22c55e', i: '💰' },
+                { k: 'Active Sessions', v: stats.activeSessions,           c: '#1e90ff', i: '⚡' }
               ].map(m => (
                 <div key={m.k} className="metric-card">
                   <div className="flex justify-between mb-2">
@@ -191,14 +200,17 @@ const AdminPage = () => {
           <div className="animate-fade-in space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="font-display text-lg font-bold text-white tracking-wide">Users</h2>
-              <input className="kym-input w-56 text-sm py-2" placeholder="Search..."
-                value={userSearch} onChange={e => setUserSearch(e.target.value)} />
+              <input className="kym-input w-56 text-sm py-2" placeholder="Search name / email..."
+                value={search} onChange={e => setSearch(e.target.value)} />
             </div>
             <div className="glass rounded-xl overflow-hidden">
               <table className="kym-table">
-                <thead><tr>
-                  <th>Name</th><th>Email</th><th>Phone</th><th>Paid</th><th>Verified</th><th>Joined</th><th>Action</th>
-                </tr></thead>
+                <thead>
+                  <tr>
+                    <th>Name</th><th>Email</th><th>Phone</th>
+                    <th>Paid</th><th>Verified</th><th>Joined</th><th>Action</th>
+                  </tr>
+                </thead>
                 <tbody>
                   {users.map(u => (
                     <tr key={u.id}>
@@ -209,8 +221,12 @@ const AdminPage = () => {
                       <td><span className={`badge-${u.is_verified ? 'green' : 'yellow'}`}>{u.is_verified ? 'Yes' : 'No'}</span></td>
                       <td className="text-xs text-kym-muted">{new Date(u.created_at).toLocaleDateString()}</td>
                       <td>
-                        <button onClick={() => toggleUser(u.id, u.is_active)}
-                          className={`text-xs px-2 py-1 rounded border transition-all ${u.is_active ? 'border-kym-red text-kym-red hover:bg-red-900/20' : 'border-kym-success text-kym-success hover:bg-green-900/20'}`}>
+                        <button onClick={() => toggleUser(u.id)}
+                          className={`text-xs px-2 py-1 rounded border transition-all ${
+                            u.is_active
+                              ? 'border-kym-red text-kym-red hover:bg-red-900/20'
+                              : 'border-kym-success text-kym-success hover:bg-green-900/20'
+                          }`}>
                           {u.is_active ? 'Suspend' : 'Activate'}
                         </button>
                       </td>
@@ -218,20 +234,22 @@ const AdminPage = () => {
                   ))}
                 </tbody>
               </table>
-              {users.length === 0 && <div className="text-center py-8 text-kym-muted text-sm">No users found</div>}
+              {users.length === 0 && (
+                <div className="text-center py-8 text-kym-muted text-sm">No users found</div>
+              )}
             </div>
           </div>
         )}
 
-        {/* Audit logs */}
+        {/* Audit Logs */}
         {activeTab === 'logs' && (
           <div className="animate-fade-in space-y-4">
             <h2 className="font-display text-lg font-bold text-white tracking-wide">Audit Logs</h2>
             <div className="glass rounded-xl overflow-hidden">
               <table className="kym-table">
-                <thead><tr>
-                  <th>User</th><th>Action</th><th>Details</th><th>IP</th><th>Status</th><th>Time</th>
-                </tr></thead>
+                <thead>
+                  <tr><th>User</th><th>Action</th><th>Details</th><th>IP</th><th>Status</th><th>Time</th></tr>
+                </thead>
                 <tbody>
                   {logs.map(l => (
                     <tr key={l.id}>
@@ -239,16 +257,23 @@ const AdminPage = () => {
                       <td className="text-xs font-mono text-kym-blue">{l.action}</td>
                       <td className="text-xs text-kym-muted max-w-xs truncate">{l.details}</td>
                       <td className="text-xs font-mono">{l.ip_address}</td>
-                      <td><span className={`badge-${l.status === 'success' ? 'green' : l.status === 'failed' ? 'red' : 'yellow'}`}>{l.status}</span></td>
+                      <td>
+                        <span className={`badge-${l.status === 'success' ? 'green' : l.status === 'failed' ? 'red' : 'yellow'}`}>
+                          {l.status}
+                        </span>
+                      </td>
                       <td className="text-xs text-kym-muted">{new Date(l.created_at).toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              {logs.length === 0 && <div className="text-center py-8 text-kym-muted text-sm">No logs</div>}
+              {logs.length === 0 && (
+                <div className="text-center py-8 text-kym-muted text-sm">No logs</div>
+              )}
             </div>
           </div>
         )}
+
       </main>
       <Footer />
     </div>
