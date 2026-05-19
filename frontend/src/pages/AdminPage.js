@@ -3,22 +3,16 @@ import React, { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import Footer from '../components/common/Footer';
 
-// Read env var — this is set at BUILD time by Netlify
 const API_URL    = process.env.REACT_APP_API_URL    || '';
 const ADMIN_PATH = process.env.REACT_APP_ADMIN_PATH || 'id-1334';
 const ADMIN_BASE = `${API_URL}/${ADMIN_PATH}/api`;
 
-// Log on load so you can confirm in browser DevTools console
-console.log('[AdminPage] API_URL   :', API_URL    || 'NOT SET');
 console.log('[AdminPage] ADMIN_BASE:', ADMIN_BASE);
 
-// Native fetch wrapper — avoids any axios baseURL issues
 const af = async (path, opts = {}) => {
   const token = localStorage.getItem('kym_admin_token');
   const url   = `${ADMIN_BASE}${path}`;
-  console.log('[AdminPage] fetch:', opts.method || 'GET', url);
-
-  const res = await fetch(url, {
+  const res   = await fetch(url, {
     ...opts,
     headers: {
       'Content-Type': 'application/json',
@@ -26,11 +20,9 @@ const af = async (path, opts = {}) => {
       ...(opts.headers || {})
     }
   });
-
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { data = { error: text }; }
-
   if (!res.ok) {
     const err = new Error(data?.error || `HTTP ${res.status}`);
     err.status = res.status;
@@ -39,7 +31,7 @@ const af = async (path, opts = {}) => {
   return data;
 };
 
-// ── Login screen ──────────────────────────────────────────────────────────────
+// ── Login ─────────────────────────────────────────────────────────────────────
 const AdminLogin = ({ onLogin }) => {
   const [email,    setEmail]    = useState('');
   const [password, setPassword] = useState('');
@@ -49,19 +41,13 @@ const AdminLogin = ({ onLogin }) => {
     e.preventDefault();
     setLoading(true);
     try {
-      const data = await af('/login', {
-        method: 'POST',
-        body: JSON.stringify({ email, password })
-      });
+      const data = await af('/login', { method: 'POST', body: JSON.stringify({ email, password }) });
       localStorage.setItem('kym_admin_token', data.token);
       onLogin(data.admin);
       toast.success('Welcome, Admin');
     } catch (err) {
-      console.error('[AdminPage] login error:', err);
       toast.error(err.message || 'Login failed');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   return (
@@ -74,7 +60,6 @@ const AdminLogin = ({ onLogin }) => {
           </div>
           <h1 className="font-display text-xl font-black tracking-widest text-white">ADMIN</h1>
           <p className="text-kym-muted text-xs mt-1">Kym Control Panel</p>
-          {/* Shows the URL being used — verify this in browser */}
           <p className="text-xs mt-2 font-mono break-all px-2"
             style={{ color: API_URL ? '#22c55e' : '#e53e3e', fontSize: 10 }}>
             {API_URL ? `✅ ${ADMIN_BASE}` : '❌ REACT_APP_API_URL not set'}
@@ -87,9 +72,7 @@ const AdminLogin = ({ onLogin }) => {
             value={password} onChange={e => setPassword(e.target.value)} required />
           <button className="btn-danger w-full" type="submit" disabled={loading}>
             {loading
-              ? <span className="flex items-center justify-center gap-2">
-                  <span className="spinner" />Logging in...
-                </span>
+              ? <span className="flex items-center justify-center gap-2"><span className="spinner"/>Logging in...</span>
               : 'Access Panel'}
           </button>
         </form>
@@ -99,17 +82,18 @@ const AdminLogin = ({ onLogin }) => {
   );
 };
 
-// ── Main panel ─────────────────────────────────────────────────────────────────
+// ── Main panel ────────────────────────────────────────────────────────────────
 const AdminPage = () => {
-  const [admin,     setAdmin]     = useState(() =>
+  const [admin,   setAdmin]   = useState(() =>
     localStorage.getItem('kym_admin_token') ? { loggedIn: true } : null
   );
-  const [tab,       setTab]       = useState('dashboard');
-  const [stats,     setStats]     = useState(null);
-  const [users,     setUsers]     = useState([]);
-  const [logs,      setLogs]      = useState([]);
-  const [search,    setSearch]    = useState('');
-  const [loading,   setLoading]   = useState(false);
+  const [tab,     setTab]     = useState('dashboard');
+  const [stats,   setStats]   = useState(null);
+  const [users,   setUsers]   = useState([]);
+  const [logs,    setLogs]    = useState([]);
+  const [search,  setSearch]  = useState('');
+  const [loading, setLoading] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(null); // { id, name, email }
 
   const logout = () => {
     localStorage.removeItem('kym_admin_token');
@@ -166,6 +150,20 @@ const AdminPage = () => {
     } catch (err) { toast.error(err.message); }
   };
 
+  // Delete user — completely removes from DB, frees email + phone
+  const handleDeleteConfirm = async () => {
+    if (!confirmDelete) return;
+    try {
+      const data = await af(`/users/${confirmDelete.id}`, { method: 'DELETE' });
+      toast.success(data.message || 'User deleted');
+      setConfirmDelete(null);
+      loadUsers();
+      if (tab === 'dashboard') loadDashboard();
+    } catch (err) {
+      toast.error('Delete failed: ' + err.message);
+    }
+  };
+
   if (!admin) return <AdminLogin onLogin={a => setAdmin(a)} />;
 
   const navItems = [
@@ -176,6 +174,43 @@ const AdminPage = () => {
 
   return (
     <div className="min-h-screen flex bg-kym-black">
+      {/* Delete confirmation modal */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          <div className="glass rounded-2xl p-8 w-full max-w-sm glow-red animate-slide-up">
+            <div className="text-center mb-6">
+              <div className="text-5xl mb-3">🗑️</div>
+              <h3 className="font-display text-lg font-bold text-white">Delete User?</h3>
+              <p className="text-kym-muted text-sm mt-2">
+                This will permanently delete:
+              </p>
+              <div className="mt-3 p-3 rounded-xl text-sm"
+                style={{ background: 'rgba(229,62,62,0.1)', border: '1px solid #e53e3e33' }}>
+                <p className="text-white font-semibold">{confirmDelete.name}</p>
+                <p className="text-kym-muted text-xs mt-0.5">{confirmDelete.email}</p>
+                <p className="text-kym-muted text-xs">{confirmDelete.phone}</p>
+              </div>
+              <p className="text-kym-muted text-xs mt-3">
+                Their email and phone number will be <span className="text-kym-success font-semibold">freed up</span> and can be used to sign up again.
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmDelete(null)}
+                className="btn-outline flex-1 py-2.5 text-sm">
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteConfirm}
+                className="btn-danger flex-1 py-2.5 text-sm">
+                🗑️ Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sidebar */}
       <aside className="w-52 border-r border-kym-border flex flex-col shrink-0"
         style={{ background: 'rgba(13,17,23,0.98)' }}>
         <div className="p-5 border-b border-kym-border">
@@ -210,6 +245,7 @@ const AdminPage = () => {
         </div>
       </aside>
 
+      {/* Content */}
       <main className="flex-1 overflow-y-auto flex flex-col">
         <div className="border-b border-kym-border px-6 py-3 flex items-center justify-between shrink-0"
           style={{ background: 'rgba(13,17,23,0.98)' }}>
@@ -219,6 +255,7 @@ const AdminPage = () => {
 
         <div className="flex-1 p-6">
 
+          {/* Dashboard */}
           {tab === 'dashboard' && (
             <div className="space-y-6 animate-fade-in">
               {stats ? (
@@ -241,17 +278,21 @@ const AdminPage = () => {
                 </div>
               ) : (
                 <div className="text-center py-16 text-kym-muted">
-                  {loading ? <span className="spinner mx-auto block" style={{ width: 32, height: 32 }} />
-                           : <p>No data — check Railway logs for errors</p>}
+                  {loading
+                    ? <span className="spinner mx-auto block" style={{ width: 32, height: 32 }} />
+                    : <p>Loading dashboard...</p>}
                 </div>
               )}
             </div>
           )}
 
+          {/* Users */}
           {tab === 'users' && (
             <div className="space-y-4 animate-fade-in">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="font-display text-sm font-bold text-white">Users</h3>
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <h3 className="font-display text-sm font-bold text-white">
+                  Users ({users.length})
+                </h3>
                 <div className="flex gap-2">
                   <input className="kym-input text-sm py-2" style={{ width: 220 }}
                     placeholder="Search name / email..."
@@ -262,7 +303,11 @@ const AdminPage = () => {
               <div className="glass rounded-xl overflow-x-auto">
                 <table className="kym-table">
                   <thead>
-                    <tr><th>Name</th><th>Email</th><th>Phone</th><th>Paid</th><th>Verified</th><th>Joined</th><th>Action</th></tr>
+                    <tr>
+                      <th>Name</th><th>Email</th><th>Phone</th>
+                      <th>Paid</th><th>Verified</th><th>Joined</th>
+                      <th>Suspend</th><th>Delete</th>
+                    </tr>
                   </thead>
                   <tbody>
                     {users.map(u => (
@@ -270,17 +315,36 @@ const AdminPage = () => {
                         <td className="text-sm font-semibold text-white">{u.name}</td>
                         <td className="text-xs text-kym-muted">{u.email}</td>
                         <td className="text-xs text-kym-muted">{u.phone}</td>
-                        <td><span className={`badge-${u.is_paid ? 'green' : 'red'}`}>{u.is_paid ? 'Yes' : 'No'}</span></td>
-                        <td><span className={`badge-${u.is_verified ? 'green' : 'yellow'}`}>{u.is_verified ? 'Yes' : 'No'}</span></td>
-                        <td className="text-xs text-kym-muted">{new Date(u.created_at).toLocaleDateString()}</td>
                         <td>
-                          <button onClick={() => toggleUser(u.id, u.is_active)}
+                          <span className={`badge-${u.is_paid ? 'green' : 'red'}`}>
+                            {u.is_paid ? 'Yes' : 'No'}
+                          </span>
+                        </td>
+                        <td>
+                          <span className={`badge-${u.is_verified ? 'green' : 'yellow'}`}>
+                            {u.is_verified ? 'Yes' : 'No'}
+                          </span>
+                        </td>
+                        <td className="text-xs text-kym-muted">
+                          {new Date(u.created_at).toLocaleDateString()}
+                        </td>
+                        <td>
+                          <button
+                            onClick={() => toggleUser(u.id, u.is_active)}
                             className={`text-xs px-2 py-1 rounded border transition-all ${
                               u.is_active
                                 ? 'border-kym-red text-kym-red hover:bg-red-900/20'
                                 : 'border-kym-success text-kym-success hover:bg-green-900/20'
                             }`}>
                             {u.is_active ? 'Suspend' : 'Activate'}
+                          </button>
+                        </td>
+                        <td>
+                          {/* Delete button — opens confirmation modal */}
+                          <button
+                            onClick={() => setConfirmDelete({ id: u.id, name: u.name, email: u.email, phone: u.phone })}
+                            className="text-xs px-2 py-1 rounded border border-kym-red text-kym-red hover:bg-red-900/30 transition-all font-semibold">
+                            🗑️ Delete
                           </button>
                         </td>
                       </tr>
@@ -294,6 +358,7 @@ const AdminPage = () => {
             </div>
           )}
 
+          {/* Logs */}
           {tab === 'logs' && (
             <div className="space-y-4 animate-fade-in">
               <div className="flex items-center justify-between">
